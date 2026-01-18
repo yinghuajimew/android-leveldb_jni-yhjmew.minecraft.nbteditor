@@ -24,47 +24,59 @@ jobs:
         git config submodule.library/src/main/jni/leveldb.url https://github.com/JJJollyjim/leveldb-mcpe.git
         git submodule update --init --recursive
 
-    # 3. 【关键步骤 A】先设置 Java 17
-    # 这是为了让 Android SDK Manager (sdkmanager) 能正常运行
-    # 如果不加这一步，sdkmanager 会因为检测到 Java 8 而报错退出
+    # 3. 【核心修复】解锁 64位 (arm64-v8a) 支持
+    # 老项目通常在 build.gradle 里写死了 abiFilters "armeabi-v7a"
+    # 这里我们使用 sed 命令强行删除包含 'abiFilters' 的行
+    # 删除后，Gradle 就会默认编译所有架构 (v7a, v8a, x86, x86_64)
+    - name: Unlock 64-bit Support
+      run: |
+        echo "Searching for build.gradle files..."
+        find . -name "build.gradle"
+        
+        # 对 library 目录下的 build.gradle 进行修改
+        # 如果项目结构不同，这里会自动匹配所有 build.gradle
+        # 只要行里包含 abiFilters，就直接删掉该行
+        find . -name "build.gradle" -exec sed -i '/abiFilters/d' {} +
+        
+        echo "Successfully removed architecture restrictions. 64-bit should now build."
+
+    # 4. 设置 JDK 17 (给 SDK Manager 用)
     - name: Set up JDK 17 for SDK Tools
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
 
-    # 4. 设置 Android SDK (此时环境是 Java 17，能成功)
+    # 5. 设置 Android SDK
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
-    # 5. 安装 NDK r21 (兼容老代码)
+    # 6. 安装 NDK r21 (兼容老代码)
     - name: Install NDK r21
       run: |
         sdkmanager "ndk;21.4.7075529"
 
-    # 6. 【关键步骤 B】再切换回 Java 8
-    # 你的项目代码太老，必须用 Java 8 才能编译通过
-    # 这一步会把 JAVA_HOME 重新指向 Java 8，供后面的 Gradle 使用
+    # 7. 设置 JDK 8 (给代码编译用)
     - name: Set up JDK 8 for Build
       uses: actions/setup-java@v4
       with:
         java-version: '8'
         distribution: 'temurin'
 
-    # 7. 配置 local.properties
+    # 8. 配置 local.properties
     - name: Configure NDK Path
       run: |
         echo "ndk.dir=$ANDROID_HOME/ndk/21.4.7075529" >> local.properties
 
-    # 8. 赋予 Gradle 权限
+    # 9. 赋予 Gradle 权限
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    # 9. 开始构建
+    # 10. 开始构建
     - name: Build Release
       run: ./gradlew assembleRelease --stacktrace
 
-    # 10. 提取构建产物
+    # 11. 提取构建产物
     - name: Extract Jar and Libs
       run: |
         mkdir -p output_files
@@ -91,11 +103,16 @@ jobs:
         # 提取 so 库
         if [ -d "temp_extracted/jni" ]; then
             cp -r temp_extracted/jni output_files/libs
-            echo "Build Architectures:"
-            ls output_files/libs
+            
+            echo "---------------------------------------------------"
+            echo "CHECKING ARCHITECTURES (You must see arm64-v8a here):"
+            ls -R output_files/libs
+            echo "---------------------------------------------------"
+        else
+            echo "Error: No JNI libs found in AAR!"
         fi
 
-    # 11. 上传结果
+    # 12. 上传结果
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
