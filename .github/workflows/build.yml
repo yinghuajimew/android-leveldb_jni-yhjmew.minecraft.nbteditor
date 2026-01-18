@@ -8,53 +8,48 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04 # 使用 22.04 以兼容旧版 NDK
+    runs-on: ubuntu-22.04
 
     steps:
-    # 1. 拉取代码 (不自动拉取子模块，后面手动修)
+    # 1. 拉取代码
     - name: Checkout Code
       uses: actions/checkout@v4
       with:
         submodules: false
 
-    # 2. 【核心修复】替换失效的子模块链接
-    # 使用 JJJollyjim 的仓库，它是 Mojang 官方仓库最标准的备份
+    # 2. 修复子模块链接 (JJJollyjim)
     - name: Fix Submodule URL
       run: |
         git submodule init
         git config submodule.library/src/main/jni/leveldb.url https://github.com/JJJollyjim/leveldb-mcpe.git
         git submodule update --init --recursive
 
-    # 3. 自动修复 build.gradle 配置 (确保兼容 Android 5.0)
-    - name: Fix Gradle Config
-      run: |
-        # 找到库的 build.gradle
-        GRADLE_FILE=$(find . -name "build.gradle" | grep "library")
-        
-        if [ -n "$GRADLE_FILE" ]; then
-            echo "Found gradle file: $GRADLE_FILE"
-            # 这里的修复主要是确保环境能跑，具体架构由 NDK 决定
-            # 老项目通常配置比较死，我们信赖下面的 NDK r21 环境
-        else
-            echo "Warning: library/build.gradle not found."
-        fi
+    # 3. 【关键步骤 A】先设置 Java 17
+    # 这是为了让 Android SDK Manager (sdkmanager) 能正常运行
+    # 如果不加这一步，sdkmanager 会因为检测到 Java 8 而报错退出
+    - name: Set up JDK 17 for SDK Tools
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
 
-    # 4. 设置 JDK 1.8
-    - name: Set up JDK 1.8
+    # 4. 设置 Android SDK (此时环境是 Java 17，能成功)
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    # 5. 安装 NDK r21 (兼容老代码)
+    - name: Install NDK r21
+      run: |
+        sdkmanager "ndk;21.4.7075529"
+
+    # 6. 【关键步骤 B】再切换回 Java 8
+    # 你的项目代码太老，必须用 Java 8 才能编译通过
+    # 这一步会把 JAVA_HOME 重新指向 Java 8，供后面的 Gradle 使用
+    - name: Set up JDK 8 for Build
       uses: actions/setup-java@v4
       with:
         java-version: '8'
         distribution: 'temurin'
-
-    # 5. 设置 Android SDK
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
-
-    # 6. 【关键】安装 NDK r21 (LTS 版)
-    # NDK r21 是编译老 C++ 代码并兼容 Android 5.0 的最佳选择
-    - name: Install NDK r21
-      run: |
-        sdkmanager "ndk;21.4.7075529"
 
     # 7. 配置 local.properties
     - name: Configure NDK Path
@@ -69,7 +64,7 @@ jobs:
     - name: Build Release
       run: ./gradlew assembleRelease --stacktrace
 
-    # 10. 提取构建产物 (.jar 和 .so)
+    # 10. 提取构建产物
     - name: Extract Jar and Libs
       run: |
         mkdir -p output_files
@@ -93,11 +88,9 @@ jobs:
             mv temp_extracted/classes.jar output_files/leveldb.jar
         fi
         
-        # 提取 so 库 (这是重点，必须包含 arm64-v8a 和 armeabi-v7a)
+        # 提取 so 库
         if [ -d "temp_extracted/jni" ]; then
             cp -r temp_extracted/jni output_files/libs
-            
-            # 检查架构是否齐全
             echo "Build Architectures:"
             ls output_files/libs
         fi
