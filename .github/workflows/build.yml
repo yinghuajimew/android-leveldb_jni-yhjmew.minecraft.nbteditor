@@ -1,0 +1,67 @@
+name: Build Android LevelDB Lib
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. 拉取代码，务必开启子模块递归，否则C++代码会缺失
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    # 2. 设置 JDK 1.8 (老项目通常需要 Java 8)
+    - name: Set up JDK 1.8
+      uses: actions/setup-java@v4
+      with:
+        java-version: '8'
+        distribution: 'temurin'
+
+    # 3. 设置 Android SDK (GitHub Actions 自带，但显式声明更好)
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    # 4. 赋予 Gradle 脚本执行权限
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    # 5. 开始构建 (生成 .aar)
+    - name: Build with Gradle
+      run: ./gradlew assembleRelease
+
+    # 6. 处理产物：把 .aar 解包，拿出 jar 和 so 文件
+    # 因为纯 jar 缺少 native 库是无法运行的，所以我帮你打成一个 zip
+    - name: Extract Jar and Libs
+      run: |
+        mkdir -p output_files
+        cd build/outputs/aar/
+        # 找到生成的 aar 文件
+        AAR_FILE=$(ls *.aar | head -n 1)
+        cp $AAR_FILE ../../../output_files/original_library.aar
+        
+        # 解压 aar
+        unzip $AAR_FILE -d temp_extracted
+        
+        # 提取 jar
+        mv temp_extracted/classes.jar ../../../output_files/leveldb.jar
+        
+        # 提取 so 库 (重要！没有这个 jar 没法用)
+        if [ -d "temp_extracted/jni" ]; then
+          cp -r temp_extracted/jni ../../../output_files/libs
+        fi
+        
+        echo "Extraction complete."
+
+    # 7. 上传结果到 GitHub Actions 页面
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: LevelDB-Build-Result
+        path: output_files/
